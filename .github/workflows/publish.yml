@@ -32,7 +32,7 @@ jobs:
       - name: Run tests
         run: python -m unittest -v
       - name: Generate feed
-        run: python generate_feed.py --feed-url "${{ steps.pages.outputs.base_url }}rss.xml"
+        run: python generate_feed.py --feed-url "${{ steps.pages.outputs.base_url }}/rss.xml"
         id: generate
       - uses: actions/upload-pages-artifact@v3
         with:
