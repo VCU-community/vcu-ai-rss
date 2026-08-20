@@ -28,6 +28,38 @@ class Story:
     title: str
     url: str
     published: datetime
+    summary: str = ""
+
+
+class ArticlePageParser(HTMLParser):
+    """Extract an article subhead, preferring the page's meta description."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta_description = ""
+        self._in_subhead = False
+        self._subhead_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
+        attrs = dict(attrs_list)
+        classes = set((attrs.get("class") or "").split())
+        if tag == "meta" and (attrs.get("name") or "").lower() == "description":
+            self.meta_description = " ".join((attrs.get("content") or "").split())
+        elif tag == "div" and "subheads" in classes:
+            self._in_subhead = True
+
+    def handle_data(self, data: str) -> None:
+        if self._in_subhead:
+            self._subhead_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "div" and self._in_subhead:
+            self._in_subhead = False
+
+    @property
+    def summary(self) -> str:
+        fallback = " ".join("".join(self._subhead_parts).split())
+        return self.meta_description or fallback
 
 
 class TopicPageParser(HTMLParser):
@@ -109,6 +141,12 @@ def fetch(url: str) -> str:
         return response.read().decode(response.headers.get_content_charset() or "utf-8")
 
 
+def fetch_summary(url: str) -> str:
+    parser = ArticlePageParser()
+    parser.feed(fetch(url))
+    return parser.summary
+
+
 def collect_stories(source_url: str = SOURCE_URL) -> list[Story]:
     stories_by_url: dict[str, Story] = {}
     page_url: str | None = source_url
@@ -126,7 +164,8 @@ def collect_stories(source_url: str = SOURCE_URL) -> list[Story]:
 
     if not stories_by_url:
         raise RuntimeError("No stories were found. The VCU News page structure may have changed.")
-    return sorted(stories_by_url.values(), key=lambda story: story.published, reverse=True)[:MAX_ITEMS]
+    selected = sorted(stories_by_url.values(), key=lambda story: story.published, reverse=True)[:MAX_ITEMS]
+    return [Story(story.title, story.url, story.published, fetch_summary(story.url)) for story in selected]
 
 
 def build_rss(stories: list[Story], feed_url: str, generated_at: datetime | None = None) -> bytes:
@@ -155,7 +194,10 @@ def build_rss(stories: list[Story], feed_url: str, generated_at: datetime | None
         guid = ET.SubElement(item, "guid", {"isPermaLink": "true"})
         guid.text = story.url
         ET.SubElement(item, "pubDate").text = email.utils.format_datetime(story.published)
-        ET.SubElement(item, "description").text = f'Read “{story.title}” on VCU News.'
+        read_more = f'Read “{story.title}” on VCU News.'
+        ET.SubElement(item, "description").text = (
+            f"{story.summary}\n\n{read_more}" if story.summary else read_more
+        )
 
     xml_body = ET.tostring(rss, encoding="utf-8", xml_declaration=True)
     return xml_body.replace(b'<rss version="2.0">', b'<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">', 1)
